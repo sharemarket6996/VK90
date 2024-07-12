@@ -1,0 +1,104 @@
+//@version=5
+strategy(title='VK HullMA Strategy', overlay=true, pyramiding=0, default_qty_type=strategy.percent_of_equity, default_qty_value=10, calc_on_every_tick=false)
+
+// === INPUTS ===
+res = input.timeframe(title='TIMEFRAME', defval='1', group="NON REPAINT")
+useRes = input(defval=true, title='Use Alternate Signals')
+intRes = input(defval=4, title='Multiplier for Alternate Signals')
+stratRes = timeframe.ismonthly ? str.tostring(timeframe.multiplier * intRes, '###M') : timeframe.isweekly ? str.tostring(timeframe.multiplier * intRes, '###W') : timeframe.isdaily ? str.tostring(timeframe.multiplier * intRes, '###D') : timeframe.isintraday ? str.tostring(timeframe.multiplier * intRes, '####') : '60'
+basisLen = input.int(defval=20, title='HullMA Period', minval=1)
+delayOffset = input.int(defval=0, title='Delay Open/Close MA (Forces Non-Repainting)', minval=0, step=1)
+
+/// Inputs for enabling/disabling alerts
+enableBuyAlert = input(defval=true, title='buy')
+enableSellAlert = input(defval=true, title='sell')
+enableTargetAlert = input(defval=true, title='target')
+enableStopLossAlert = input(defval=true, title='Stoploss')
+enableTarget = input(defval=true, title='Enable Target')
+enableStopLoss = input(defval=true, title='Enable Stop Loss')
+
+// Target and Stop Loss Parameters
+targetPoints = input.int(defval=6, title='Target Points', minval=1)
+stopLossPoints = input.int(defval=2, title='Stop Loss Points', minval=1)
+
+// Main Indicator
+// Functions
+hullma(src, length) =>
+    wma1 = ta.wma(src, length / 2)
+    wma2 = ta.wma(src, length)
+    hma = ta.wma(2 * wma1 - wma2, math.round(math.sqrt(length)))
+    hma
+
+// security wrapper for repeat calls
+reso(exp, use, res) =>
+    security_1 = request.security(syminfo.tickerid, res, exp, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+    use ? security_1 : exp
+
+// === SERIES SETUP ===
+closeSeries = hullma(close[delayOffset], basisLen)
+openSeries = hullma(open[delayOffset], basisLen)
+
+// Get Alternate resolution Series if selected.
+closeSeriesAlt = reso(closeSeries, useRes, stratRes)
+openSeriesAlt = reso(openSeries, useRes, stratRes)
+
+// === STRATEGY VARIABLES ===
+var float lastTradeProfit = na
+var string lastTradeType = ""
+
+// === ALERT conditions ===
+
+// Calculate the target prices
+longTP = close + targetPoints
+shortTP = close - targetPoints
+
+// Calculate the stop-loss prices
+longSL = close - stopLossPoints
+shortSL = close + stopLossPoints
+
+// Buy and Sell Conditions
+xlong = ta.crossover(closeSeriesAlt, openSeriesAlt)
+xshort = ta.crossunder(closeSeriesAlt, openSeriesAlt)
+longCond = xlong and closeSeriesAlt > openSeriesAlt
+shortCond = xshort and closeSeriesAlt < openSeriesAlt
+
+// Alert Messages
+longAlertMessage = ''
+shortAlertMessage = ''
+
+// Determine the outcome of the previous trade
+if (strategy.opentrades > 0)
+    if (lastTradeType == 'Long')
+        if (strategy.netprofit > lastTradeProfit)
+            longAlertMessage := 'buy - profit'
+        else
+            longAlertMessage := 'buy - loss'
+    else if (lastTradeType == 'Short')
+        if (strategy.netprofit > lastTradeProfit)
+            shortAlertMessage := 'sell - profit'
+        else
+            shortAlertMessage := 'sell - loss'
+
+// Update last trade information
+if (longCond)
+    strategy.entry('Long', strategy.long)
+    lastTradeType := 'Long'
+    lastTradeProfit := strategy.netprofit
+if (shortCond)
+    strategy.entry('Short', strategy.short)
+    lastTradeType := 'Short'
+    lastTradeProfit := strategy.netprofit
+
+// Alert conditions
+if (enableBuyAlert and longCond)
+    alert('Buy Alert\n' + longAlertMessage + '\nTarget Price: ' + str.tostring(longTP) + '\nStop Loss Price: ' + str.tostring(longSL))
+if (enableSellAlert and shortCond)
+    alert('Sell Alert\n' + shortAlertMessage + '\nTarget Price: ' + str.tostring(shortTP) + '\nStop Loss Price: ' + str.tostring(shortSL))
+
+// Strategy orders
+if (longCond)
+    strategy.exit('Take Profit', from_entry='Long', limit=longTP)
+    strategy.exit('Stop Loss', from_entry='Long', stop=longSL)
+if (shortCond)
+    strategy.exit('Take Profit', from_entry='Short', limit=shortTP)
+    strategy.exit('Stop Loss', from_entry='Short', stop=shortSL)
